@@ -53,7 +53,7 @@ The reasoning behind these choices:
 - **muscriptor timing.** muscriptor is run with `--detect-tempo false` on the audio with 1 s of silence prepended; the notes are shifted back afterwards and anything past the end of the audio is dropped. Its tempo detection shifts the whole timeline to put the first detected downbeat on a bar line (one test came out a full bar late), and without lead-in it misses notes in the first ~0.5 s. The end is never padded: muscriptor works in 5 s chunks and fills a mostly silent last chunk with invented notes.
 - **Velocity.** muscriptor writes every note at velocity 100, so its notes are set to a flat 50 (`--velocity`). Transkun parts keep their own dynamics.
 - **Tempo.** All MIDI files share one tempo: the strongest tempogram peak between 60 and 150 BPM is used as a prior for beat tracking, and a straight-line fit through the beat times gives the period. In `band` mode the tempo is then refined, within ±4%, to the value whose 16th-note grid best fits the transcribed drum hits. It is rounded to 2 decimals, so setting the DAW to exactly that BPM lines the MIDI up with the WAV. On rubato playing the number is only nominal.
-- **Stem levels.** Stems are written by the bundled `stems` script without its true-level flag. audio-separator then scales the input and each stem down independently when their peak exceeds 0.9, so the stems do not sum back to the mix. That does not matter for note detection. The `-t` flag, which keeps true level, is used by the companion tool [`multitrack-stems`](https://github.com/heiofdvk/multitrack-stems).
+- **Stem levels.** Stems are written by the bundled `stems` script without its true-level flag. audio-separator then scales the input and each stem down independently when their peak exceeds 0.9, so the stems do not sum back to the mix. That does not matter for note detection. The `-t` flag, which keeps true level, is used by the companion tool [`multitrack-stems`](https://github.com/joaquinjacu/multitrack-stems).
 
 ### `auto` mode rules
 
@@ -163,7 +163,7 @@ In `All.mid`, same-pitch notes from different parts would cut each other off on 
 
 ## The `stems` helper
 
-`stems` is a small bash wrapper around audio-separator with short model names (`ft`, `6s`, `rofo`, `dual`, `mdx23c`, or any model filename), folder input, and a `-t` true-level mode. The same script is included in the companion repository [`multitrack-stems`](https://github.com/heiofdvk/multitrack-stems), which uses `-t` for every stage; the two copies are identical. `stems -h` prints its options.
+`stems` is a small bash wrapper around audio-separator with short model names (`ft`, `6s`, `rofo`, `dual`, `mdx23c`, or any model filename), folder input, and a `-t` true-level mode. The same script is included in the companion repository [`multitrack-stems`](https://github.com/joaquinjacu/multitrack-stems), which uses `-t` for every stage; the two copies are identical. `stems -h` prints its options.
 
 ## Models
 
