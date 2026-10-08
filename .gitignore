@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Output: audio and MIDI derived from recordings are never committed
+Transcriptions/
+*_stems/
+.transcribe.json
+*.wav
+*.flac
+*.mp3
+*.m4a
+*.aif
+*.aiff
+*.ogg
+*.mid
+*.midi
+
+# Model weights (downloaded on first use, see README)
+audio-separator-models/
+*.ckpt
+*.th
+*.pt
+*.onnx
+*.safetensors
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

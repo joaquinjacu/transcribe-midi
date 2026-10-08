@@ -1,0 +1,151 @@
+#!/bin/bash
+# stems — split audio into stems with audio-separator
+#
+# Usage:  stems [-m MODEL] [-o OUTDIR] [-w] [-t] <file|folder> [more files...]
+#
+#   -m  model shorthand (default: ft)
+#         ft       htdemucs_ft      4-stem drums/bass/other/vocals  — best all-rounder
+#         6s       htdemucs_6s      6-stem, adds guitar+piano       — piano head often empty
+#         mmi      hdemucs_mmi      4-stem alternative
+#         rofo     BS-Roformer      vocals/instrumental             — best vocals, slow
+#         dual     MelBand Duality  vocals/instrumental             — best instrumental, slow
+#         mdx23c   MDX23C-InstVoc   vocals/instrumental             — fast, good
+#       (any other value is passed through as a raw model filename)
+#
+#   -o  output directory (default: ./<inputname>_stems)
+#   -w  write WAV instead of FLAC
+#   -t  true level: 32-bit float WAV stems that sum back to the input. By default
+#       audio-separator peak-normalizes the input and each stem to 0.9 separately
+#       (so stems don't sum) and writes 16-bit. Fine for transcription; use -t for
+#       multitracks, null tests, or feeding one split into another.
+#
+# Always clears the macOS `hidden` flag on outputs — audio-separator's temp-file
+# writes intermittently leave it set, which makes stems invisible in Finder.
+#
+# Environment (all optional):
+#   STEMS_MODEL_DIR          where model weights are cached (default: ~/audio-separator-models)
+#   AUDIO_SEPARATOR          audio-separator CLI (default: ~/.local/bin/audio-separator, else PATH)
+#   AUDIO_SEPARATOR_PYTHON   a Python with numpy + soundfile, used by -t (default: the
+#                            `uv tool` env of audio-separator, else python3)
+
+set -euo pipefail
+
+MODEL_DIR="${STEMS_MODEL_DIR:-$HOME/audio-separator-models}"
+SEP="${AUDIO_SEPARATOR:-$HOME/.local/bin/audio-separator}"
+[ -n "${AUDIO_SEPARATOR:-}" ] || [ -x "$SEP" ] || SEP="$(command -v audio-separator || true)"
+model="ft"
+outdir=""
+fmt="FLAC"
+true_level=0
+
+usage() { awk 'NR>1 && /^#/ {sub(/^# ?/,""); print; next} NR>1 {exit}' "$0"; exit "${1:-0}"; }
+
+while getopts ":m:o:wth" opt; do
+  case $opt in
+    m) model="$OPTARG" ;;
+    o) outdir="$OPTARG" ;;
+    w) fmt="WAV" ;;
+    t) true_level=1; fmt="WAV" ;;
+    h) usage 0 ;;
+    *) echo "unknown option -$OPTARG" >&2; usage 1 ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+[ $# -eq 0 ] && usage 1
+
+case "$model" in
+  ft)     mf="htdemucs_ft.yaml" ;;
+  6s)     mf="htdemucs_6s.yaml" ;;
+  mmi)    mf="hdemucs_mmi.yaml" ;;
+  rofo)   mf="model_bs_roformer_ep_317_sdr_12.9755.ckpt" ;;
+  dual)   mf="melband_roformer_instvox_duality_v2.ckpt" ;;
+  mdx23c) mf="MDX23C-8KFFT-InstVoc_HQ.ckpt" ;;
+  *)      mf="$model" ;;
+esac
+
+[ -n "$SEP" ] && [ -x "$SEP" ] || { echo "audio-separator not found (install it, or set AUDIO_SEPARATOR)" >&2; exit 1; }
+
+# Expand any directories into the audio files they contain
+files=()
+for arg in "$@"; do
+  if [ -d "$arg" ]; then
+    while IFS= read -r f; do files+=("$f"); done < <(
+      find "$arg" -maxdepth 1 -type f \
+        \( -iname '*.wav' -o -iname '*.flac' -o -iname '*.mp3' \
+           -o -iname '*.m4a' -o -iname '*.aif' -o -iname '*.aiff' -o -iname '*.ogg' \) | sort)
+  elif [ -f "$arg" ]; then
+    files+=("$arg")
+  else
+    echo "skipping (not found): $arg" >&2
+  fi
+done
+
+[ ${#files[@]} -eq 0 ] && { echo "no audio files to process" >&2; exit 1; }
+
+extra=()
+if [ "$true_level" -eq 1 ]; then
+  # audio-separator caps the normalization threshold at 1.0, and stems can peak well
+  # above the mix (they partly cancel in it). So: float input halved (6 dB headroom,
+  # an exact power-of-two scale), threshold 1.0, float output (subtype follows the
+  # input), then every stem doubled back. Halving/doubling is lossless in float.
+  extra=(--use_soundfile --normalization 1.0)
+  PY="${AUDIO_SEPARATOR_PYTHON:-$HOME/.local/share/uv/tools/audio-separator/bin/python}"
+  [ -n "${AUDIO_SEPARATOR_PYTHON:-}" ] || [ -x "$PY" ] || PY="python3"
+  tmpdir="$(mktemp -d)"; trap 'rm -rf "$tmpdir"' EXIT
+fi
+scale() {  # scale <factor> <in> <out> [check]: float WAV gain; with check, refuse clipped/normalized stems
+  "$PY" - "$@" <<'EOF'
+import sys, soundfile as sf
+k, src, dst = float(sys.argv[1]), sys.argv[2], sys.argv[3]
+y, sr = sf.read(src, dtype="float32", always_2d=True)
+if len(sys.argv) > 4 and abs(y).max() >= 0.999:
+    sys.exit(f"stem hit the separator's 1.0 ceiling, so it was rescaled: {src}")
+sf.write(dst, y * k, sr, subtype="FLOAT")
+EOF
+}
+
+echo "model: $mf   format: $fmt$([ "$true_level" -eq 1 ] && echo ' (float, true level)')   files: ${#files[@]}"
+
+for f in "${files[@]}"; do
+  base="$(basename "$f")"
+  if [ -n "$outdir" ]; then dest="$outdir"; else dest="$(dirname "$f")/${base%.*}_stems"; fi
+  mkdir -p "$dest"
+  echo "--> $base"
+  src="$f"; sepout="$dest"
+  if [ "$true_level" -eq 1 ]; then
+    src="$tmpdir/${base%.*}.wav"   # same basename so stem names don't change
+    ffmpeg -nostdin -loglevel error -y -i "$f" -map 0:a:0 -c:a pcm_f32le "$tmpdir/decoded.wav"
+    scale 0.5 "$tmpdir/decoded.wav" "$src"
+    sepout="$tmpdir/out"; rm -rf "$sepout"; mkdir -p "$sepout"
+  fi
+  "$SEP" "$src" \
+    --model_filename "$mf" \
+    --model_file_dir "$MODEL_DIR" \
+    --output_dir "$sepout" \
+    --output_format "$fmt" ${extra[@]+"${extra[@]}"} 2>&1 | grep -E "Separation duration|Separation complete|ERROR|Error" || true
+  if [ "$true_level" -eq 1 ]; then
+    n=0
+    for s in "$sepout"/*; do
+      [ -f "$s" ] || continue
+      scale 2 "$s" "$dest/$(basename "$s")" check; n=$((n + 1))
+    done
+    [ "$n" -gt 0 ] || { echo "    ! no stems written for $base" >&2; exit 1; }
+  fi
+  # In iCloud-synced folders (Desktop/Documents) the file provider sets UF_HIDDEN on
+  # freshly written files as it ingests them, and sometimes never clears it — the stems
+  # then exist on disk but are invisible in Finder. Clearing once immediately loses the
+  # race, so retry over ~15s until nothing is hidden. (macOS only: `ls -O` / chflags.)
+  if [ "$(uname)" = Darwin ]; then
+    for _ in 1 2 3 4 5 6; do
+      chflags nohidden "$dest" "$dest"/* 2>/dev/null || true
+      if [ "$(ls -lO "$dest" | grep -c hidden || true)" -eq 0 ]; then break; fi
+      sleep 3
+    done
+    still=$(ls -lO "$dest" | grep -c hidden || true)
+    if [ "$still" -gt 0 ]; then
+      echo "    ! $still file(s) still hidden — run: chflags nohidden '$dest'/*"
+    fi
+  fi
+  echo "    -> $dest"
+done

@@ -1,0 +1,10 @@
+# Python environment that runs transcribe.py (tested with Python 3.11).
+# The versions in the comments are the ones the author runs; others may work.
+numpy          # 1.26.4
+soundfile      # 0.14.0
+librosa        # 0.10.2.post1
+pretty_midi    # 0.2.11.post0
+transkun       # 2.0.1 (pulls in torch; its pretrained weights ship inside the package)
+
+# Not installed here, see README: muscriptor and audio-separator (each in its own
+# `uv tool` environment), ffmpeg and yt-dlp on PATH.
